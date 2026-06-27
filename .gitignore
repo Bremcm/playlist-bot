@@ -1,0 +1,6 @@
+/bin/
+playlist-bot
+.env
+.idea/
+.vscode/
+.DS_Store
