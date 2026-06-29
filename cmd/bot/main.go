@@ -6,6 +6,7 @@ import (
 
 	"github.com/Bremcm/playlist-bot/internal/lastfm"
 	"github.com/Bremcm/playlist-bot/internal/recommender"
+	"github.com/Bremcm/playlist-bot/internal/session"
 	"github.com/Bremcm/playlist-bot/internal/telegram"
 	"github.com/joho/godotenv"
 )
@@ -25,8 +26,9 @@ func main() {
 
 	fetcher := lastfm.New(lastfmKey)
 	rec := recommender.New(fetcher)
+	session := session.New()
 
-	bot, err := telegram.New(token, rec)
+	bot, err := telegram.New(token, rec, session)
 	if err != nil {
 		log.Fatalf("create bot: %v", err)
 	}
