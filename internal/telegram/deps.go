@@ -8,7 +8,8 @@ import (
 )
 
 type PlaylistBuilder interface {
-	Build(ctx context.Context, seeds []models.Track, limit int) (recommender.BuildResult, error)
+	FetchCandidates(ctx context.Context, seed models.Track) ([]models.Candidate, error)
+	Rank(seeds []models.Track, candidates []models.Candidate, limit int) recommender.BuildResult
 }
 
 type TrackSearcher interface {

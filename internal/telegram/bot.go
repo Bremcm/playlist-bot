@@ -64,7 +64,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	track, corrected, ok := b.resolveTrack(ctx, parsed)
@@ -74,42 +74,58 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	count := b.sessions.Add(chatID, track)
+	candidates, err := b.builder.FetchCandidates(ctx, track)
+	if err != nil {
+		b.reply(chatID, "Не получилось проверить трек, попробуй ещё раз.")
+		log.Printf("fetch candidates: %v", err)
+		return
+	}
+
+	count := b.sessions.Add(chatID, session.Entry{
+		Seed:       track,
+		Candidates: candidates,
+	})
 
 	prefix := "Принял: "
 	if corrected {
 		prefix = "Распознал как: "
 	}
+	line := prefix + track.Artist + " — " + track.Name
+
+	if len(candidates) == 0 {
+		line += "\n⚠️ У Last.fm нет похожих на этот трек — он не попадёт в плейлист."
+	}
 
 	if count >= 5 {
-		b.reply(chatID, prefix+track.Artist+" — "+track.Name+
-			"\nУ тебя 5 треков — это максимум. Собираю плейлист…")
+		b.reply(chatID, line+"\nУ тебя 5 треков — это максимум. Собираю плейлист…")
 		b.handleDone(chatID)
 		return
 	}
-	b.reply(chatID, prefix+track.Artist+" — "+track.Name+
-		". Всего треков: "+itoa(count)+". Ещё? Или /done.")
+	b.reply(chatID, line+"\nВсего треков: "+itoa(count)+". Ещё? Или /done.")
 }
 
 func (b *Bot) handleDone(chatID int64) {
-	seeds := b.sessions.Get(chatID)
-	if len(seeds) == 0 {
+	entries := b.sessions.Entries(chatID)
+	if len(entries) == 0 {
 		b.reply(chatID, "Ты ещё не прислал ни одного трека. Пришли хотя бы один в формате «Исполнитель — Название».")
 		return
 	}
-	b.reply(chatID, "Собираю плейлист…")
+
+	var seeds []models.Track
+	var allCandidates []models.Candidate
+	var failed []models.Track
+
+	for _, e := range entries {
+		seeds = append(seeds, e.Seed)
+		if len(e.Candidates) == 0 {
+			failed = append(failed, e.Seed)
+			continue
+		}
+		allCandidates = append(allCandidates, e.Candidates...)
+	}
 
 	limit := playlistSize(len(seeds))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	result, err := b.builder.Build(ctx, seeds, limit)
-	if err != nil {
-		b.reply(chatID, "Что-то пошло не так при сборке плейлиста. Попробуй ещё раз.")
-		log.Printf("build error: %v", err)
-		return
-	}
+	result := b.builder.Rank(seeds, allCandidates, limit)
 
 	b.sessions.Clear(chatID)
 
@@ -123,9 +139,9 @@ func (b *Bot) handleDone(chatID int64) {
 		sb.WriteString(t.Name)
 		sb.WriteString("\n")
 	}
-	if len(result.Failed) > 0 {
+	if len(failed) > 0 {
 		sb.WriteString("\nПо этим трекам похожих не нашлось:\n")
-		for _, t := range result.Failed {
+		for _, t := range failed {
 			sb.WriteString("• ")
 			sb.WriteString(t.Artist)
 			sb.WriteString(" — ")
@@ -133,6 +149,7 @@ func (b *Bot) handleDone(chatID int64) {
 			sb.WriteString("\n")
 		}
 	}
+
 	b.reply(chatID, sb.String())
 }
 
@@ -157,6 +174,7 @@ func (b *Bot) resolveTrack(ctx context.Context, parsed models.Track) (models.Tra
 	best := results[0]
 
 	if isCloseTrack(parsed, best) {
+		best.Name = stripArtistPrefix(best.Name, best.Artist)
 		corrected := best.Artist != parsed.Artist || best.Name != parsed.Name
 		return best, corrected, true
 	}
