@@ -17,3 +17,18 @@ type apiTrack struct {
 type apiArtist struct {
 	Name string `json:"name"`
 }
+
+type searchResponce struct {
+	Results searchResults `json:"results"`
+}
+type searchResults struct {
+	TrackMatches trackMatches `json:"trackmatches"`
+}
+
+type trackMatches struct {
+	Track []searchTrack `json:"track"`
+}
+type searchTrack struct {
+	Name   string `json:"name"`
+	Artist string `json:"artist"`
+}

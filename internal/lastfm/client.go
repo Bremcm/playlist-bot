@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/Bremcm/playlist-bot/internal/models"
@@ -78,4 +79,44 @@ func (c *Client) GetSimilar(ctx context.Context, seed models.Track) ([]models.Ca
 	}
 
 	return candidates, nil
+}
+
+func (c *Client) Search(ctx context.Context, query string, limit int) ([]models.Track, error) {
+	params := url.Values{}
+	params.Set("method", "track.search")
+	params.Set("track", query)
+	params.Set("api_key", c.apiKey)
+	params.Set("format", "json")
+	params.Set("limit", strconv.Itoa(limit))
+
+	reqURL := baseURL + "?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("lastfm: build search request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("lastfm: do search request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("lastfm: search unexpected status %d", resp.StatusCode)
+	}
+
+	var parsed searchResponce
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("lastfm: decode search response: %w", err)
+	}
+
+	tracks := make([]models.Track, 0, len(parsed.Results.TrackMatches.Track))
+	for _, t := range parsed.Results.TrackMatches.Track {
+		tracks = append(tracks, models.Track{
+			Artist: t.Artist,
+			Name:   t.Name,
+		})
+	}
+	return tracks, nil
 }
