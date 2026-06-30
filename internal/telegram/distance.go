@@ -1,6 +1,10 @@
 package telegram
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Bremcm/playlist-bot/internal/models"
+)
 
 func levenshtein(a, b string) int {
 	ra := []rune(a)
@@ -49,6 +53,29 @@ func min3(a, b, c int) int {
 		m = c
 	}
 	return m
+}
+
+func stripArtistPrefix(name, artist string) string {
+	lowerName := strings.ToLower(name)
+	lowerArtist := strings.ToLower(artist)
+
+	prefix := lowerArtist + " - "
+
+	if strings.HasPrefix(lowerName, prefix) {
+		return strings.TrimSpace(name[len(prefix):])
+	}
+	return name
+}
+
+func isCloseTrack(a, b models.Track) bool {
+	if !isCloseMatch(a.Artist, b.Artist) {
+		return false
+	}
+
+	nameA := stripArtistPrefix(a.Name, a.Artist)
+	nameB := stripArtistPrefix(b.Name, b.Artist)
+
+	return isCloseMatch(nameA, nameB)
 }
 
 func isCloseMatch(guess, target string) bool {

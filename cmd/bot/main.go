@@ -26,9 +26,9 @@ func main() {
 
 	fetcher := lastfm.New(lastfmKey)
 	rec := recommender.New(fetcher)
-	session := session.New()
+	sessions := session.New()
 
-	bot, err := telegram.New(token, rec, session)
+	bot, err := telegram.New(token, rec, fetcher, sessions)
 	if err != nil {
 		log.Fatalf("create bot: %v", err)
 	}

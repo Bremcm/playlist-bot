@@ -1,6 +1,10 @@
 package telegram
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Bremcm/playlist-bot/internal/models"
+)
 
 func TestLevenshtein(t *testing.T) {
 	tests := []struct {
@@ -36,6 +40,49 @@ func TestIsCloseMatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isCloseMatch(tt.guess, tt.target); got != tt.want {
 				t.Errorf("isCloseMatch(%q, %q) = %v, want %v", tt.guess, tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsCloseTrack(t *testing.T) {
+	tests := []struct {
+		name  string
+		input models.Track
+		found models.Track
+		want  bool
+	}{
+		{
+			name:  "точное совпадение",
+			input: models.Track{Artist: "Cher", Name: "Believe"},
+			found: models.Track{Artist: "Cher", Name: "Believe"},
+			want:  true,
+		},
+		{
+			name:  "артист продублирован в названии (баг Last.fm)",
+			input: models.Track{Artist: "Cher", Name: "Believe"},
+			found: models.Track{Artist: "Cher", Name: "Cher - Believe"},
+			want:  true,
+		},
+		{
+			name:  "мелкая опечатка распознаётся",
+			input: models.Track{Artist: "Madona", Name: "Frozn"},
+			found: models.Track{Artist: "Madonna", Name: "Frozen"},
+			want:  true,
+		},
+		{
+			name:  "совсем другой трек отвергается",
+			input: models.Track{Artist: "Cher", Name: "Believe"},
+			found: models.Track{Artist: "Metallica", Name: "One"},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCloseTrack(tt.input, tt.found); got != tt.want {
+				t.Errorf("isCloseTrack(%+v, %+v) = %v, want %v",
+					tt.input, tt.found, got, tt.want)
 			}
 		})
 	}
