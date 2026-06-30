@@ -34,10 +34,12 @@ func (b *Bot) Run() {
 	updates := b.api.GetUpdatesChan(u)
 
 	for update := range updates {
-		if update.Message == nil {
-			continue
+		switch {
+		case update.Message != nil:
+			b.handleMessage(update.Message)
+		case update.CallbackQuery != nil:
+			b.handleCallback(update.CallbackQuery)
 		}
-		b.handleMessage(update.Message)
 	}
 }
 
@@ -67,12 +69,65 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	track, corrected, ok := b.resolveTrack(ctx, parsed)
-	if !ok {
+	res := b.resolveTrack(ctx, parsed)
+
+	switch res.outcome {
+	case outcomeUnknown:
 		b.reply(chatID, "Не уверен, что нашёл такой трек: "+parsed.Artist+" — "+parsed.Name+
 			".\nПроверь название или пришли по-другому.")
 		return
+
+	case outcomeChoose:
+		b.sessions.SetPending(chatID, res.options)
+		b.sendOptions(chatID, parsed, res.options)
+		return
 	}
+
+	b.acceptTrack(chatID, res.track, res.corrected)
+}
+
+func (b *Bot) handleCallback(cq *tgbotapi.CallbackQuery) {
+	chatID := cq.Message.Chat.ID
+	data := cq.Data
+
+	b.api.Request(tgbotapi.NewCallback(cq.ID, ""))
+
+	b.removeKeyboard(cq.Message)
+
+	const prefix = "choose:"
+	if !strings.HasPrefix(data, prefix) {
+		return
+	}
+
+	arg := strings.TrimPrefix(data, prefix)
+
+	if arg == "cancel" {
+		b.sessions.ClearPending(chatID)
+		b.reply(chatID, "Хорошо, пропустим этот трек. Пришли другой или /done.")
+		return
+	}
+
+	index, err := strconv.Atoi(arg)
+	if err != nil {
+		return
+	}
+
+	track, ok := b.sessions.TakePending(chatID, index)
+	if !ok {
+		b.reply(chatID, "Этот выбор уже неактуален. Пришли трек заново.")
+		return
+	}
+	b.acceptTrack(chatID, track, true)
+}
+
+func (b *Bot) acceptTrack(chatID int64, track models.Track, corrected bool) {
+	if b.sessions.HasSeed(chatID, track) {
+		b.reply(chatID, "Этот трек уже в списке: "+track.Artist+" — "+track.Name+". Пришли другой или /done.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	candidates, err := b.builder.FetchCandidates(ctx, track)
 	if err != nil {
@@ -102,6 +157,15 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		return
 	}
 	b.reply(chatID, line+"\nВсего треков: "+itoa(count)+". Ещё? Или /done.")
+}
+
+func (b *Bot) removeKeyboard(msg *tgbotapi.Message) {
+	empty := tgbotapi.NewEditMessageReplyMarkup(
+		msg.Chat.ID,
+		msg.MessageID,
+		tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
+	)
+	b.api.Request(empty)
 }
 
 func (b *Bot) handleDone(chatID int64) {
@@ -153,6 +217,29 @@ func (b *Bot) handleDone(chatID int64) {
 	b.reply(chatID, sb.String())
 }
 
+func (b *Bot) sendOptions(chatID int64, parsed models.Track, options []models.Track) {
+	text := "Не нашёл точно «" + parsed.Artist + " — " + parsed.Name + "». Может, ты имел в виду:"
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for i, opt := range options {
+		label := opt.Artist + " — " + opt.Name
+		data := "choose:" + itoa(i)
+		btn := tgbotapi.NewInlineKeyboardButtonData(label, data)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(btn))
+	}
+
+	cancelBtn := tgbotapi.NewInlineKeyboardButtonData("Ничего из этого", "choose:cancel")
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(cancelBtn))
+
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(rows...)
+
+	out := tgbotapi.NewMessage(chatID, text)
+	out.ReplyMarkup = keyboard
+	if _, err := b.api.Send(out); err != nil {
+		log.Printf("send options: %v", err)
+	}
+}
+
 func (b *Bot) reply(chatID int64, text string) {
 	out := tgbotapi.NewMessage(chatID, text)
 	if _, err := b.api.Send(out); err != nil {
@@ -160,15 +247,30 @@ func (b *Bot) reply(chatID int64, text string) {
 	}
 }
 
-func (b *Bot) resolveTrack(ctx context.Context, parsed models.Track) (models.Track, bool, bool) {
+type resolveOutcome int
+
+const (
+	outcomeAccept resolveOutcome = iota
+	outcomeChoose
+	outcomeUnknown
+)
+
+type resolveResult struct {
+	outcome   resolveOutcome
+	track     models.Track
+	corrected bool
+	options   []models.Track
+}
+
+func (b *Bot) resolveTrack(ctx context.Context, parsed models.Track) resolveResult {
 	query := parsed.Artist + " " + parsed.Name
 
 	results, err := b.searcher.Search(ctx, query, 5)
 	if err != nil {
-		return parsed, false, true
+		return resolveResult{outcome: outcomeAccept, track: parsed, corrected: false}
 	}
 	if len(results) == 0 {
-		return parsed, false, false
+		return resolveResult{outcome: outcomeUnknown}
 	}
 
 	best := results[0]
@@ -176,10 +278,18 @@ func (b *Bot) resolveTrack(ctx context.Context, parsed models.Track) (models.Tra
 	if isCloseTrack(parsed, best) {
 		best.Name = stripArtistPrefix(best.Name, best.Artist)
 		corrected := best.Artist != parsed.Artist || best.Name != parsed.Name
-		return best, corrected, true
+		return resolveResult{outcome: outcomeAccept, track: best, corrected: corrected}
 	}
 
-	return parsed, false, false
+	options := make([]models.Track, 0, 3)
+	for i, r := range results {
+		if i >= 3 {
+			break
+		}
+		r.Name = stripArtistPrefix(r.Name, r.Artist)
+		options = append(options, r)
+	}
+	return resolveResult{outcome: outcomeChoose, options: options}
 }
 
 func itoa(n int) string {
