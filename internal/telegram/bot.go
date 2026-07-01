@@ -17,15 +17,16 @@ type Bot struct {
 	builder  PlaylistBuilder
 	searcher TrackSearcher
 	sessions *session.Store
+	store    HistoryStore
 }
 
-func New(token string, builder PlaylistBuilder, searcher TrackSearcher, sessions *session.Store) (*Bot, error) {
+func New(token string, builder PlaylistBuilder, searcher TrackSearcher, sessions *session.Store, store HistoryStore) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, err
 	}
 	log.Printf("autorized as @%s", api.Self.UserName)
-	return &Bot{api: api, builder: builder, searcher: searcher, sessions: sessions}, nil
+	return &Bot{api: api, builder: builder, searcher: searcher, sessions: sessions, store: store}, nil
 }
 
 func (b *Bot) Run() {
@@ -215,6 +216,12 @@ func (b *Bot) handleDone(chatID int64) {
 	}
 
 	b.reply(chatID, sb.String())
+
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := b.store.SaveRequest(saveCtx, chatID, seeds, result.Playlist); err != nil {
+		log.Printf("save request: %v", err)
+	}
 }
 
 func (b *Bot) sendOptions(chatID int64, parsed models.Track, options []models.Track) {

@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: playlist
+      POSTGRES_PASSWORD: playlist
+      POSTGRES_DB: playlist
+    ports: 
+      - "5437:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U playlist"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "postgres://playlist:playlist@db:5432/playlist?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
