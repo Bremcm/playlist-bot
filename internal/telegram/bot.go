@@ -53,11 +53,16 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	case "start":
 		b.reply(chatID, "Привет! Я соберу тебе плейлист.\n"+
 			"Пришли от 1 до 5 треков в формате «Исполнитель — Название», "+
-			"по одному в сообщении. Когда закончишь — отправь /done.")
+			"по одному в сообщении. Когда закончишь — отправь /done.\n\n"+
+			"/history — посмотреть прошлые запросы.")
 		return
 
 	case "done":
 		b.handleDone(chatID)
+		return
+
+	case "history":
+		b.handleHistory(chatID)
 		return
 	}
 
@@ -222,6 +227,46 @@ func (b *Bot) handleDone(chatID int64) {
 	if err := b.store.SaveRequest(saveCtx, chatID, seeds, result.Playlist); err != nil {
 		log.Printf("save request: %v", err)
 	}
+}
+
+func (b *Bot) handleHistory(chatID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	items, err := b.store.History(ctx, chatID, 5)
+	if err != nil {
+		b.reply(chatID, "Не получилось загрузить историю, попробуй позже.")
+		log.Printf("load history: %v", err)
+		return
+	}
+
+	if len(items) == 0 {
+		b.reply(chatID, "Пока пусто. Собери первый плейлист — пришли трек и /done.")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📜 Твои последние запросы:\n")
+
+	for i, item := range items {
+		sb.WriteString("\n")
+		sb.WriteString(itoa(i + 1))
+		sb.WriteString(") по трекам: ")
+
+		for j, seed := range item.Seeds {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(seed.Artist)
+			sb.WriteString(" — ")
+			sb.WriteString(seed.Name)
+		}
+		sb.WriteString("\n   → ")
+		sb.WriteString(itoa(len(item.Playlist)))
+		sb.WriteString(" треков в плейлисте\n")
+	}
+
+	b.reply(chatID, sb.String())
 }
 
 func (b *Bot) sendOptions(chatID int64, parsed models.Track, options []models.Track) {
